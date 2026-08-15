@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.zip
+*.db
+dump.rdb
+*.pt
+*.onnx
+*.bin
+.idea/
+.vscode/
