@@ -3,14 +3,17 @@ core/sse_client.py
 SSE (Server-Sent Events) Client for real-time sync from Cloud.
 
 The Cloud stream emits:
-  - `sync`           → {revision, roster_revision} on connect AND on any change
+  - `sync`           → {revision, roster_revision, schedule_revision} on connect
+                       (the on-connect sync carries all three), and later
+                       `sync` events may carry only the key(s) that changed —
+                       e.g. {"schedule_revision": …} on a policy change.
   - `enroll`         → {room, timeoutS} — arm a door for card enrolment
   - `enroll_cancel`  → {room} — disarm it
   - `heartbeat`      → keep-alive every 15 s of quiet
 
-The sync contract is revision-based: on `sync`, the SyncAgent compares both
-values against its cached ones and re-fetches whichever moved. There are no
-per-record member/embedding events.
+The sync contract is revision-based: on `sync`, the SyncAgent compares the
+revision values against its cached ones and re-fetches whichever moved. There
+are no per-record member/embedding events.
 """
 import json
 import threading
@@ -32,8 +35,10 @@ class SSEClient:
         Initialize SSE client.
 
         Args:
-            on_sync: Called with {"revision": str, "roster_revision": str}
-                     on every sync event (connect + changes).
+            on_sync: Called with one or more of
+                     {"revision", "roster_revision", "schedule_revision"}
+                     on every sync event (connect + changes). Note that a
+                     change-only `sync` may carry just {"schedule_revision"}.
             on_enroll: Called with {"room", "timeoutS"} on `enroll` events.
             on_enroll_cancel: Called with {"room"} on `enroll_cancel` events.
         """

@@ -38,6 +38,27 @@ PORT = 5005
 
 PRESENCE_TTL = 180   # seconds; mirror of the real backend
 
+# Scheduled-access mock: a synthetic schedule bundle + revision served to the
+# edge. Edit _SCHEDULE_BUNDLE to exercise different policy states / edge timing.
+_SCHEDULE_REVISION = 0
+_SCHEDULE_BUNDLE = {
+    "success": True,
+    "room_id": None,
+    "revision": "h1:mock",
+    "lockdown": False,
+    "require_request": False,
+    "edge_run_start": None,   # null = 24/7
+    "edge_run_end": None,
+    "schedule_start": None,
+    "schedule_end": None,
+    "holidays": [],
+    "scheduled_lockdowns": [],
+    "access_overrides": [],
+    "weekly_schedule": [],
+    "school_breaks": [],
+    "exceptions": [],
+}
+
 # Accept several common key spellings so unknown registration-software
 # payloads still work. Unknown fields are preserved and echoed back.
 ID_KEYS   = ("student_id", "id", "studentId", "person_id")
@@ -89,6 +110,7 @@ def _status_dict():
         "status": "ok",
         "revision": _revision,
         "roster_revision": _roster_revision,
+        "schedule_revision": _SCHEDULE_REVISION,
         "total_embeddings": len(_embeddings),
         "total_students": len(_students),
         "last_updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -274,11 +296,18 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/edge/rooms":
             now = time.time()
             rooms = []
-            for name in _rooms:
+            for i, name in enumerate(_rooms, start=1):
                 d = _doors.get(name)
                 online = bool(d) and (now - d.get("last_beat", 0)) <= PRESENCE_TTL
-                rooms.append({"name": name, "online": online})
+                rooms.append({"id": i, "name": name, "online": online})
             self._send_json(rooms)
+
+        elif path == "/api/edge/schedule":
+            room_id = int(query.get("room", 0) or 0)
+            bundle = dict(_SCHEDULE_BUNDLE)
+            bundle["room_id"] = room_id
+            bundle["revision"] = str(_SCHEDULE_REVISION) + _SCHEDULE_BUNDLE.get("revision", "")
+            self._send_json(bundle)
 
         elif path == "/api/edge/allowlist":
             room = query.get("room", "")

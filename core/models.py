@@ -65,10 +65,19 @@ class ModelHub:
             print(f"[ModelHub] Hand model load failed: {e}")
 
     @classmethod
-    def get_faces(cls, frame: np.ndarray) -> list:
+    def get_faces(cls, frame: np.ndarray, min_face_box_size=None) -> list:
         with cls._lock:
             faces = cls.face_model.get(frame)
-        return [f for f in faces if in_roi(f.bbox, frame.shape)]
+        out = []
+        min_w = min_face_box_size if min_face_box_size is not None \
+            else getattr(cfg, "MIN_FACE_BOX_SIZE", 0)
+        for f in faces:
+            if not in_roi(f.bbox, frame.shape):
+                continue
+            if min_w and (f.bbox[2] - f.bbox[0]) < min_w:
+                continue
+            out.append(f)
+        return out
 
     @classmethod
     def get_liveness(cls, frame: np.ndarray, bbox) -> dict:
@@ -83,23 +92,27 @@ class ModelHub:
             return cls.liveness_model.predict(frame, bbox)
 
     @classmethod
-    def get_hand_detections(cls, frame: np.ndarray) -> list:
+    def get_hand_detections(cls, frame: np.ndarray, conf=None) -> list:
         if not cls.hand_enabled or cls.hand_model is None:
             return []
+        conf = conf if conf is not None else getattr(cfg, "HAND_CONF", 0.4)
         with cls._lock:
             try:
                 results = cls.hand_model.predict(
                     frame,
-                    conf=cfg.HAND_CONF,
+                    conf=conf,
                     iou=cfg.HAND_IOU,
                     imgsz=cfg.HAND_IMGSZ,
                     verbose=False,
                 )
                 dets = []
+                min_w = getattr(cfg, "MIN_HAND_BOX_SIZE", 0)
                 for r in results:
                     for box in r.boxes:
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                         if not in_roi((x1, y1, x2, y2), frame.shape):
+                            continue
+                        if min_w and (x2 - x1) < min_w:
                             continue
                         dets.append({
                             "bbox": (x1, y1, x2, y2),

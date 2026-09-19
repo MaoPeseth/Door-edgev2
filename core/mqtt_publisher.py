@@ -26,24 +26,32 @@ class MQTTPublisher:
         self._reconnect_thread = None
         self._enroll_capture_cb = None
         self._access_denied_cb = None
+        self._rfid_granted_cb = None
+        self._esp_online_cbs = []
+        self._esp_offline_cbs = []
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def connect(self):
-        self._client.connect(cfg.MQTT_BROKER, cfg.MQTT_PORT, keepalive=60)
+        self._client.on_message = self._on_message
+        # connect_async + reconnect_delay_set: the loop thread keeps trying to
+        # reach the broker with backoff, so a broker that is down at boot does
+        # NOT crash the whole edge app — it comes up automatically when the
+        # broker returns (and _on_connect re-subscribes).
+        self._client.reconnect_delay_set(min_delay=1, max_delay=30)
+        rc = self._client.connect_async(cfg.MQTT_BROKER, cfg.MQTT_PORT, keepalive=60)
+        if rc != 0:
+            print(f"[MQTT] connect_async returned rc={rc}")
         # paho's loop_forever (started by loop_start) reconnects on its own —
         # a second manual reconnect thread would fight it and churn the session.
         self._client.loop_start()
-        time.sleep(0.5)   # brief wait for on_connect to fire
 
-        # Route incoming ESP32 messages (presence + access logs + enrol captures)
-        self._client.on_message = self._on_message
-        self._client.subscribe(cfg.MQTT_TOPIC_STATUS)
-        self._client.subscribe(cfg.MQTT_TOPIC_ACCESS_LOG)
-        self._client.subscribe(cfg.MQTT_TOPIC_ENROLL_CAPTURE)
-        print(f"[MQTT] Subscribed to {cfg.MQTT_TOPIC_STATUS} (ESP32 presence)")
-        print(f"[MQTT] Subscribed to {cfg.MQTT_TOPIC_ACCESS_LOG} (RFID events)")
-        print(f"[MQTT] Subscribed to {cfg.MQTT_TOPIC_ENROLL_CAPTURE} (enrol captures)")
+        # Topic subscriptions are issued in _on_connect (below), not here: paho's
+        # default clean_session=True makes the broker drop subscriptions on
+        # disconnect, so subscribing only once at startup would leave the ESP
+        # status / access-log / enrol-capture feeds permanently silent after any
+        # reconnect. _on_connect re-subscribes on every (re)connection.
+        print(f"[MQTT] MQTT loop started (subscribes happen on connect)")
 
     def disconnect(self):
         self._client.loop_stop()
@@ -66,7 +74,17 @@ class MQTTPublisher:
     def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             self._connected = True
-            print(f"[MQTT] Connected to {cfg.MQTT_BROKER}:{cfg.MQTT_PORT}")
+            # Re-issue the inbound-ESP topic subscriptions on every connect —
+            # see self.connect()/the module docstring: clean_session drops
+            # them on disconnect and missing re-subscribe would kill the
+            # door/status + RFID + enrol-capture feeds until restart.
+            client.subscribe(cfg.MQTT_TOPIC_STATUS)
+            client.subscribe(cfg.MQTT_TOPIC_ACCESS_LOG)
+            client.subscribe(cfg.MQTT_TOPIC_ENROLL_CAPTURE)
+            print(f"[MQTT] Connected to {cfg.MQTT_BROKER}:{cfg.MQTT_PORT} — "
+                  f"subscribed to {cfg.MQTT_TOPIC_STATUS} (presence), "
+                  f"{cfg.MQTT_TOPIC_ACCESS_LOG} (RFID), "
+                  f"{cfg.MQTT_TOPIC_ENROLL_CAPTURE} (enrol)")
         else:
             print(f"[MQTT] Connection failed rc={rc}")
 
@@ -87,6 +105,33 @@ class MQTTPublisher:
         """
         self._access_denied_cb = callback
 
+    def set_rfid_granted_callback(self, callback):
+        """Register a handler for granted ESP32 access logs (allowlisted cards).
+
+        Called with the raw message dict, on the MQTT callback thread. Use to
+        forward successful RFID grants to the Cloud access log.
+        """
+        self._rfid_granted_cb = callback
+
+    def set_esp_online_callback(self, callback):
+        """Register a handler called when ESP32 transitions to online.
+
+        Called with no args, on the MQTT callback thread. Use for re-sync
+        (e.g. push schedule + allowlist on reconnect) or status alerts.
+        May be called multiple times — each callback runs on the transition.
+        """
+        if callback and callback not in self._esp_online_cbs:
+            self._esp_online_cbs.append(callback)
+
+    def set_esp_offline_callback(self, callback):
+        """Register a handler called when ESP32 transitions to offline.
+
+        Called with no args, on the MQTT callback thread. May be called
+        multiple times — each callback runs on the transition.
+        """
+        if callback and callback not in self._esp_offline_cbs:
+            self._esp_offline_cbs.append(callback)
+
     def _on_message(self, client, userdata, msg):
         topic = msg.topic
 
@@ -100,6 +145,12 @@ class MQTTPublisher:
             if changed:
                 print(f"[MQTT] ESP32 {'ONLINE' if online else 'OFFLINE'}")
                 state.add_event(f"ESP32 {'online' if online else 'offline'}", "info")
+                for cb in (self._esp_online_cbs if online else self._esp_offline_cbs):
+                    try:
+                        cb()
+                    except Exception as e:
+                        print(f"[MQTT] ESP32 {'online' if online else 'offline'} "
+                              f"callback error: {e}")
             return
 
         try:
@@ -126,6 +177,10 @@ class MQTTPublisher:
                 "granted": True, "epoch": time.time(), "ts": _now(),
             })
             state.add_event(f"{name or pid} via {method}", "ok")
+            # Hand off to the edge (Cloud access-granted event) off this
+            # callback — the ESP already opens the door, this is audit only.
+            if self._rfid_granted_cb:
+                self._rfid_granted_cb(data)
         else:
             uid = data.get("card_uid", "?")
             state.set_last_access({
@@ -204,6 +259,31 @@ class MQTTPublisher:
         }
         self._publish(cfg.MQTT_TOPIC_SYNC_CARD_UID, payload)
         print(f"[MQTT] CARD_DELETE → {card_uid}")
+
+    def publish_schedule_sync(self, bundle: dict):
+        """Push schedule + lockdown to ESP32 for offline enforcement.
+
+        Includes the run window (edge_run_start/end) and holidays — forward-
+        compatible: current ESP firmware ignores them until it learns the
+        fields (Phase C).
+        """
+        payload = {
+            "type": "full_sync",
+            "revision": bundle.get("revision", ""),
+            "lockdown": bundle.get("lockdown", False),
+            "weekly_schedule": bundle.get("weekly_schedule", []),
+            "edge_run_start": bundle.get("edge_run_start"),
+            "edge_run_end": bundle.get("edge_run_end"),
+            "holidays": bundle.get("holidays", []),
+            "timestamp": _now()
+        }
+        self._publish(cfg.MQTT_TOPIC_SCHEDULE_SYNC, payload)
+        print(f"[MQTT] SCHEDULE_SYNC → revision={bundle.get('revision', '')}, "
+              f"lockdown={bundle.get('lockdown', False)}, "
+              f"run={(bundle.get('edge_run_start') or '24/7')}–"
+              f"{(bundle.get('edge_run_end') or '24/7')}, "
+              f"holidays={len(bundle.get('holidays', []))}, "
+              f"slots={len(bundle.get('weekly_schedule', []))}")
 
     def publish_warning_alert(self, method: str, fail_count: int,
                               door_id: str = None):

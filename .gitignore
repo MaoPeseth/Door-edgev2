@@ -4,8 +4,11 @@ __pycache__/
 *.zip
 *.db
 dump.rdb
+schedule_bundle.json
 *.pt
 *.onnx
 *.bin
 .idea/
 .vscode/
+logs/
+*.jsonl

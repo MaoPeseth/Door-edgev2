@@ -45,6 +45,15 @@ class AlertTracker:
         # re-fire Telegram alerts every episode.
         self._last_spoof_alert = {}
 
+        # ESP32 status-alert chain (offline → grace → alert → escalate):
+        # _esp_offline_timer holds the pending grace/escalation timer (None when
+        # idle); _esp_offline_alerted means an esp_offline /alert has actually
+        # fired, so a later restore can send the esp_online "back up" alert;
+        # _esp_alert_count is how many offline alerts have fired (escalation #).
+        self._esp_offline_timer = None
+        self._esp_offline_alerted = False
+        self._esp_alert_count = 0
+
         # Timestamps for timeout reset
         self._last_activity = time.time()
 
@@ -62,7 +71,8 @@ class AlertTracker:
         return time.time() - last < cfg.FACE_ALERT_MIN_INTERVAL
 
     def record_unknown_face(self, face_embedding: np.ndarray, frame=None,
-                            face_crop: tuple = None, door_id: str = None) -> int:
+                            face_crop: tuple = None, door_id: str = None,
+                            warning_threshold: int = None) -> int:
         """
         Count consecutive hand-raised unknown-face attempts.
 
@@ -75,8 +85,12 @@ class AlertTracker:
         counter can never re-fire the alert). Returns 0 while silenced
         (cooldown) or when the attempt count did not change (still inside
         ATTEMPT_MIN_INTERVAL) — callers must not POST a /event for it.
+
+        warning_threshold: override the default cfg.WARNING_THRESHOLD
+        (e.g. use a lower threshold in IR mode so alerts fire sooner).
         """
         door_id = door_id or cfg.DOOR_ID
+        warn_thr = warning_threshold if warning_threshold is not None else cfg.WARNING_THRESHOLD
         now = time.time()
 
         # Cooldown window: fully silent — attempts are not counted or logged.
@@ -109,7 +123,7 @@ class AlertTracker:
             else:
                 return 0
 
-            if fail_count >= cfg.WARNING_THRESHOLD and door_id not in self._alerted_doors:
+            if fail_count >= warn_thr and door_id not in self._alerted_doors:
                 self._alerted_doors.add(door_id)
                 self._last_face_alert[door_id] = now
                 self._trigger_alert(
@@ -229,6 +243,82 @@ class AlertTracker:
                 "card_attempts": card_count,
                 "total": face_count + card_count
             }
+
+    # ── ESP32 status alerts (offline / restored → Telegram) ──────────────────
+
+    def record_esp_offline(self):
+        """ESP32 dropped (door/status → offline).
+
+        Starts the grace timer: the /alert fires only if the device is STILL
+        offline when it elapses (an ESP mid-reconnect reconnects within
+        seconds and is not an incident), then re-fires every
+        ESP_OFFLINE_ESCALATE_S while it stays down. A reconnect during the
+        grace/escalation cancels the chain silently — no alert spam on flaps.
+        """
+        if not cfg.ESP_OFFLINE_ALERT_ENABLED:
+            return
+        with self._lock:
+            if self._esp_offline_timer is not None:
+                return  # a grace/escalation chain is already pending
+            self._esp_alert_count = 0
+            timer = threading.Timer(cfg.ESP_OFFLINE_ALERT_GRACE_S,
+                                    self._esp_offline_check)
+            timer.daemon = True
+            self._esp_offline_timer = timer
+        timer.start()
+
+    def _esp_offline_check(self):
+        """Timer fire: re-verify the ESP is still offline before alerting, then
+        chain the next escalation if configured. Runs on a daemon timer thread."""
+        if self._mqtt.is_esp_online():
+            with self._lock:
+                self._esp_offline_timer = None
+            return  # came back during grace / since the last escalation
+
+        escalate = cfg.ESP_OFFLINE_ESCALATE_S > 0
+        with self._lock:
+            self._esp_alert_count += 1
+            self._esp_offline_alerted = True
+            if escalate:
+                timer = threading.Timer(cfg.ESP_OFFLINE_ESCALATE_S,
+                                        self._esp_offline_check)
+                timer.daemon = True
+                self._esp_offline_timer = timer
+            else:
+                self._esp_offline_timer = None
+            count = self._esp_alert_count
+
+        self._post_status_alert("esp_offline", count)
+        if escalate:
+            timer.start()
+
+    def record_esp_restored(self):
+        """ESP32 came back (door/status → online). Cancel any pending offline
+        alert/escalation chain and, only if an esp_offline alert had actually
+        fired, notify Telegram that the device is back up."""
+        with self._lock:
+            timer = self._esp_offline_timer
+            self._esp_offline_timer = None
+            alerted = self._esp_offline_alerted
+            self._esp_offline_alerted = False
+            self._esp_alert_count = 0
+        if timer is not None:
+            timer.cancel()
+        if cfg.ESP_RESTORED_ALERT_ENABLED and alerted:
+            self._post_status_alert("esp_online")
+
+    def _post_status_alert(self, method: str, fail_count: int = 0):
+        """POST a device-status /alert to the Cloud (→ Telegram). No-throw,
+        posted on its own daemon thread so it never blocks the caller."""
+
+        def _send():
+            try:
+                self._cloud.report_suspicious_alert(method=method,
+                                                    fail_count=fail_count)
+            except Exception as e:
+                print(f"[Cloud] {method} alert error: {e}")
+
+        threading.Thread(target=_send, daemon=True, name="StatusAlert").start()
 
     def _trigger_alert(self, door_id: str, method: str, fail_count: int,
                        card_uid: str = None, face_frame=None, face_crop: tuple = None):

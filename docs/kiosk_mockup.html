@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Door-Edge Kiosk — Design Mockup</title>
+<style>
+  /* ============================================================
+     Door-Edge Kiosk — HTML/CSS mockup
+     Green brand + dark hallway theme, walk-up readable.
+     The user will port this final layout into Tkinter.
+     ============================================================ */
+
+  :root {
+    --bg:      #0A0F0C;   /* near-black green-tinted background */
+    --panel:   #101612;   /* card surface */
+    --panel-2: #16201A;   /* nested / recessed surface */
+    --line:    #22332A;   /* hairline border */
+    --fg:      #F2F8F4;   /* primary text */
+    --fg-soft: #B9C9BE;   /* secondary text */
+    --dim:     #6E8276;   /* muted text */
+
+    /* Brand — green is the base status language */
+    --green:       #2BD37A;
+    --green-deep:  #0F7A45;
+    --green-glow:  0 0 24px rgba(43,211,122,0.35);
+
+    /* Alerts — intentional accents, never part of the base palette */
+    --amber:  #FFB648;   /* scanning / verifying / warning */
+    --red:    #F0555C;   /* unknown face, spoof, denied, lockdown */
+    --cyan:   #4FD8EB;   /* informational (RFID tapped, distance hint) */
+
+    --mono: "SFMono-Regular", ui-monospace, "DejaVu Sans Mono", monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 18px 22px 18px 22px;
+    gap: 16px;
+  }
+
+  /* ---------- Header ---------- */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 22px;
+    flex: 0 0 auto;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .brand img {           /* <-- logo: /home/tee/.../Door-Edge V2/Untitled.jpeg */
+    height: 58px;
+    width: auto;
+    border-radius: 6px;
+    object-fit: contain;
+  }
+  .brand .title { line-height: 1.02; }
+  .brand .title h1 {
+    font-size: 26px;
+    letter-spacing: 4px;
+    font-weight: 800;
+    color: var(--fg);
+  }
+  .brand .title .sub {
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: var(--dim);
+    margin-top: 4px;
+    font-family: var(--mono);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .clock {
+    text-align: right;
+    font-family: var(--mono);
+    line-height: 1.1;
+  }
+  .clock .time { font-size: 30px; font-weight: 700; color: var(--fg); }
+  .clock .date { font-size: 13px; color: var(--dim); }
+
+  .badge {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    padding: 12px 26px;
+    border-radius: 10px;
+    color: var(--bg);
+    min-width: 180px;
+    text-align: center;
+    border: none;
+  }
+  .badge.locked      { background: var(--dim); }
+  .badge.scanning    { background: var(--amber); color: #241a00; }
+  .badge.verifying   { background: var(--amber); color: #241a00; }
+  .badge.unlocked    { background: var(--green); }
+  .badge.alert       { background: var(--red); color: #fff; animation: pulse 1.2s infinite; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+  /* ---------- Body grid ---------- */
+  .body {
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    grid-template-rows: 1fr auto;
+    gap: 16px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  /* ---------- Camera feed (main focus) ---------- */
+  .feed {
+    grid-row: 1 / 3;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .feed .cam-label {
+    position: absolute; top: 14px; left: 18px;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--dim); letter-spacing: 1px;
+    background: rgba(10,15,12,.55);
+    padding: 5px 10px; border-radius: 6px;
+  }
+  .feed .hint {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 22px; font-weight: 700; letter-spacing: 1px;
+    background: rgba(10,15,12,.6); padding: 10px 22px;
+    border-radius: 10px; white-space: nowrap;
+  }
+  .feed .hint.green { color: var(--green); }
+  .feed .hint.amber { color: var(--amber); }
+  .feed .hint.red   { color: var(--red); border: 1px solid var(--red); }
+  .feed .offline {
+    position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    font-size: 26px; letter-spacing: 2px; color: var(--dim);
+  }
+  /* Fake camera frame (replace with live feed in Tk) */
+  .feed .fake-cam {
+    width: 100%; height: 100%;
+    background:
+      radial-gradient(circle at 50% 40%, rgba(43,211,122,.06), transparent 60%),
+      repeating-linear-gradient(0deg, #0e1410 0 2px, #0b100d 2px 4px);
+  }
+
+  /* ---------- Right column ---------- */
+  .right {
+    display: flex; flex-direction: column; gap: 16px; min-height: 0;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 18px;
+  }
+  .panel h2 {
+    font-size: 13px; letter-spacing: 2px; color: var(--dim);
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .panel h2::before {
+    content: ""; width: 4px; height: 14px; border-radius: 2px;
+    background: var(--green);
+  }
+
+  /* ---- Status panel ---- */
+  .status-grid { display: grid; grid-template-columns: 1fr auto; row-gap: 10px; column-gap: 8px; }
+  .status-grid .k { font-size: 16px; color: var(--fg-soft); }
+  .status-grid .v { font-size: 16px; font-weight: 700; text-align: right; }
+  .status-grid .v.green { color: var(--green); }
+  .status-grid .v.dim   { color: var(--dim); }
+  .status-grid .v.red   { color: var(--red); }
+
+  /* ---- Last access ---- */
+  .last-name {
+    font-size: 34px; font-weight: 800; line-height: 1.05; margin-bottom: 2px;
+  }
+  .last-result { font-size: 19px; font-weight: 700; }
+  .last-result.granted  { color: var(--green); }
+  .last-result.denied   { color: var(--red); }
+  .last-meta { font-size: 14px; color: var(--dim); margin-top: 6px; font-family: var(--mono); }
+
+  /* ---- Alert / warning ---- */
+  .alert {
+    border-radius: 12px; padding: 14px 18px; font-weight: 800; font-size: 20px;
+    letter-spacing: .5px; display: none;
+  }
+  .alert.show { display: block; }
+  .alert.warn { background: rgba(240,85,92,.16); color: var(--red); border: 1px solid var(--red); }
+  .alert.suspicious { background: rgba(255,182,72,.14); color: var(--amber); border: 1px solid var(--amber); }
+
+  /* ---- Event ticker ---- */
+  .ticker {
+    flex: 1 1 0; min-height: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: 15px;
+    overflow-y: auto;
+  }
+  .ticker .row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 6px; border-bottom: 1px solid #1a241e;
+  }
+  .ticker .row:last-child { border-bottom: none; }
+  .ticker .ts { color: var(--dim); flex: 0 0 auto; }
+  .ticker .tag {
+    flex: 0 0 auto; width: 44px; text-align: center;
+    font-size: 12px; font-weight: 800; border-radius: 6px; padding: 2px 0;
+  }
+  .ticker .tag.face { background: rgba(43,211,122,.15); color: var(--green); }
+  .ticker .tag.rfid { background: rgba(79,216,235,.14); color: var(--cyan); }
+  .ticker .msg { color: var(--fg-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ticker .msg .ok   { color: var(--green); }
+  .ticker .msg .deny { color: var(--red); }
+
+  /* ---------- Footer ---------- */
+  .footer {
+    grid-column: 1 / -1;
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 20px;
+    font-size: 13px; color: var(--dim);
+  }
+  .footer .credit { letter-spacing: .5px; }
+  .footer .ver { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ HEADER ============ -->
+  <header class="header">
+    <div class="brand">
+      <img src="../Untitled.jpeg" alt="Door-Edge logo" />
+      <div class="title">
+        <h1>DOOR-EDGE</h1>
+        <div class="sub">ROOM 001 · ESP32-001 · 10.4.70.114</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="clock">
+        <div class="time" id="clock">14:42:08</div>
+        <div class="date" id="date">MON 31 AUG 2026</div>
+      </div>
+      <div class="badge scanning" id="badge">SCANNING</div>
+    </div>
+  </header>
+
+  <!-- ============ BODY ============ -->
+  <div class="body">
+
+    <!-- Camera feed -->
+    <section class="feed">
+      <div class="fake-cam"></div>
+      <div class="cam-label">CAM 0 · 640x480</div>
+      <div class="hint amber" id="hint">Raise hand to unlock</div>
+    </section>
+
+    <!-- Right column -->
+    <div class="right">
+
+      <!-- System status -->
+      <div class="panel">
+        <h2>SYSTEM STATUS</h2>
+        <div class="status-grid">
+          <span class="k">Enrolled faces</span><span class="v">24</span>
+          <span class="k">MQTT</span><span class="v green">connected</span>
+          <span class="k">ESP32</span><span class="v green">online</span>
+          <span class="k">Cloud</span><span class="v green">connected</span>
+          <span class="k">Schedule</span><span class="v green">WEEKDAY</span>
+        </div>
+      </div>
+
+      <!-- Last access -->
+      <div class="panel">
+        <h2>LAST ACCESS</h2>
+        <div class="last-name">Sok Dara</div>
+        <div class="last-result granted">ACCESS GRANTED · face</div>
+        <div class="last-meta">T002 · sim 0.762 · 14:39:51</div>
+      </div>
+
+      <!-- Alerts -->
+      <div class="alert warn" id="alertWarn">⚠ UNKNOWN FACE — attempt #3</div>
+      <div class="alert suspicious" id="alertSusp">⚠ SPOOF DETECTED — NO ACCESS</div>
+
+      <!-- Event ticker -->
+      <div class="panel">
+        <h2>RECENT EVENTS</h2>
+        <div class="ticker">
+          <div class="row"><span class="ts">14:41:02</span><span class="tag face">FACE</span><span class="msg">Sok Dara <span class="ok">ACCESS GRANTED</span></span></div>
+          <div class="row"><span class="ts">14:40:33</span><span class="tag rfid">RFID</span><span class="msg">Card A1B2C3 <span class="ok">ACCESS GRANTED</span></span></div>
+          <div class="row"><span class="ts">14:39:51</span><span class="tag face">FACE</span><span class="msg">Sok Dara <span class="ok">ACCESS GRANTED</span></span></div>
+          <div class="row"><span class="ts">14:38:20</span><span class="tag face">FACE</span><span class="msg">Unknown <span class="deny">ACCESS DENIED</span></span></div>
+          <div class="row"><span class="ts">14:37:04</span><span class="tag face">FACE</span><span class="msg">SPC-001 <span class="deny">SPOOF DETECTED</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="credit">Sponsored by Dr. Thap Tharoeun · Prof. Kuong Samnang</div>
+      <div class="credit">Developed by Mao Peseth &amp; Team</div>
+      <div class="ver">Door-Edge v2.0</div>
+    </footer>
+  </div>
+</div>
+
+<script>
+  /* ---- Demo: drive badge / hint / alerts from live state ---- */
+  const badges = {
+    locked:   ["LOCKED",    "locked"],
+    scanning: ["SCANNING",  "scanning"],
+    verifying:["VERIFYING", "verifying"],
+    unlocked: ["UNLOCKED",  "unlocked"],
+    alert:    ["LOCKDOWN",  "alert"],
+  };
+  const badgeEl = document.getElementById("badge");
+  const hintEl = document.getElementById("hint");
+  const alertWarn = document.getElementById("alertWarn");
+  const alertSusp = document.getElementById("alertSusp");
+
+  /* Try each state on a loop so you can review every variant */
+  const demoStates = ["scanning","verifying","unlocked","scanning","alert","locked"];
+  let i = 0;
+  setInterval(() => {
+    const b = demoStates[i % demoStates.length];
+    badgeEl.textContent = badges[b][0];
+    badgeEl.className = "badge " + badges[b][1];
+    // hint + alerts per state
+    if (b === "locked")      { hintEl.textContent="Door locked · RFID to open"; hintEl.className="hint green"; }
+    if (b === "scanning")    { hintEl.textContent="Raise hand to unlock";       hintEl.className="hint amber"; }
+    if (b === "verifying")   { hintEl.textContent="Verifying…";                hintEl.className="hint amber"; }
+    if (b === "unlocked")    { hintEl.textContent="ACCESS GRANTED";            hintEl.className="hint green"; }
+    if (b === "alert")       { hintEl.textContent="LOCKDOWN — NO ACCESS";      hintEl.className="hint red"; }
+    alertWarn.classList.toggle("show", b === "alert");
+    alertSusp.classList.toggle("show", b === "locked");
+    i++;
+  }, 1600);
+
+  /* live clock */
+  function tickClock() {
+    const d = new Date();
+    document.getElementById("clock").textContent =
+      d.toLocaleTimeString("en-GB", { hour12: false });
+    document.getElementById("date").textContent =
+      d.toLocaleDateString("en-US", { weekday:"short", day:"2-digit", month:"short", year:"numeric" }).toUpperCase();
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+</script>
+</body>
+</html>

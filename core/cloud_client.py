@@ -23,6 +23,15 @@ import requests
 import config as cfg
 
 
+class CloudPermanentError(Exception):
+    """The server definitively rejected the request (a 4xx, excluding 429).
+
+    Raised by `_request(..., raise_on_4xx=True)` so buffering consumers (the
+    offline queue) can drop a permanently-rejected entry instead of retrying
+    it forever — while still requeing genuinely transient failures. Not raised
+    for network errors, timeouts or 5xx/429 (those are retryable)."""
+
+
 class CloudClient:
     """HTTP client for Cloud API communication."""
 
@@ -36,11 +45,13 @@ class CloudClient:
         self._timeout = 30  # seconds
 
     def _request(self, method: str, endpoint: str, data: dict = None,
-                 retries: list = None) -> Optional[dict]:
+                 retries: list = None, raise_on_4xx: bool = False) -> Optional[dict]:
         """
         Make HTTP request to Cloud API with retry logic.
         Returns response JSON or None on failure.
         retries: optional override of the default backoff schedule.
+        raise_on_4xx: raise CloudPermanentError on a definitive 4xx (not 429)
+        so callers distinguish "server rejects this" from "server unreachable".
         """
         url = f"{self._base_url}{endpoint}"
         if retries is None:
@@ -68,7 +79,12 @@ class CloudClient:
                 if response.status_code in (200, 201):
                     return response.json()
                 else:
-                    print(f"[CloudClient] HTTP {response.status_code}: {response.text}")
+                    print(f"[CloudClient] HTTP {response.status_code}: {response.text[:200]}")
+                    if raise_on_4xx and 400 <= response.status_code < 500 \
+                            and response.status_code != 429:
+                        raise CloudPermanentError(
+                            f"HTTP {response.status_code} for {endpoint}"
+                        )
                     return None
 
             except requests.exceptions.ConnectionError:
@@ -121,9 +137,52 @@ class CloudClient:
     def get_sync_status(self) -> Optional[dict]:
         """
         GET /api/edge/sync-status
-        Returns: {status, revision, roster_revision, total_embeddings, total_students, last_updated}
+        Returns: {status, revision, roster_revision, schedule_revision,
+                  total_embeddings, total_students, last_updated}
         """
         return self._request("GET", "/api/edge/sync-status")
+
+    def get_schedule_bundle(self, room_id: int) -> Optional[dict]:
+        """
+        GET /api/edge/schedule?room=<id>
+        Returns the per-room schedule bundle (revision, lockdown, weekly_schedule,
+        edge_run_start/edge_run_end, holidays, exceptions, ...) or None on failure.
+        Uses the same retry pattern as other reads. This is a READ — it is NOT
+        routed through the offline event queue.
+        """
+        return self._request("GET", f"/api/edge/schedule?room={room_id}")
+
+    def get_room_ids(self) -> Optional[dict]:
+        """
+        GET /api/edge/rooms → {name: id} map.
+
+        The backend returns [{"id": <int pk>, "name": ..., "online": ...}].
+        Entries without an "id" field are skipped (name → None). Logs a warning
+        when every entry lacks an id (backend dependency not deployed yet).
+        """
+        resp = self._request("GET", "/api/edge/rooms")
+        if isinstance(resp, dict):
+            resp = resp.get("rooms")
+        if not isinstance(resp, list):
+            print(f"[CloudClient] Unexpected /rooms response for room ids: {resp}")
+            return None
+
+        mapping = {}
+        missing = 0
+        for entry in resp:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            rid = entry.get("id")
+            if name is not None and rid is not None:
+                mapping[name] = rid
+            else:
+                missing += 1
+        if mapping and not all(v is None for v in mapping.values()):
+            return mapping
+        if missing == len(resp):
+            print("[CloudClient] WARNING: backend missing room id — schedule sync disabled")
+        return mapping or None
 
     def get_rooms(self) -> Optional[list]:
         """

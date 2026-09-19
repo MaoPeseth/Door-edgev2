@@ -26,8 +26,15 @@ except ImportError:
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import config as cfg
+
+# Event-poster pool shared by the MQTT callbacks below. A burst of RFID taps
+# used to spawn an unbounded daemon thread each (each Cloud POST can block
+# ~30s × 3 retries); a capped pool keeps that bounded while still off the
+# MQTT loop thread.
+_EVENT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="CloudEvent")
 
 
 def _cap_openvino_threads(n):
@@ -97,10 +104,34 @@ def main():
                                            room_id=cfg.ROOM_ID, card_uid=card_uid)
             except Exception as e:
                 print(f"[Cloud] Unknown card event error: {e}")
-        threading.Thread(target=_send, daemon=True, name="DeniedEvent").start()
+        _EVENT_POOL.submit(_send)
         alert_tracker.record_unknown_card(card_uid)
 
     mqtt.set_access_denied_callback(_on_rfid_denied)
+
+    # Successful RFID grants — closed the access-log gap: every allowlisted
+    # card scan is now POSTed to the Cloud. The ESP has already opened the
+    # door; this is audit/telemetry only, so it must not block the MQTT loop.
+    def _on_rfid_granted(data):
+        card_uid = data.get("card_uid", "")
+        person_id = data.get("person_id", "")
+        name = data.get("name", "")
+
+        def _send():
+            try:
+                cloud.report_rfid_match(person_id, name, card_uid,
+                                        room_id=cfg.ROOM_ID)
+            except Exception as e:
+                print(f"[Cloud] RFID granted event error: {e}")
+        _EVENT_POOL.submit(_send)
+
+    mqtt.set_rfid_granted_callback(_on_rfid_granted)
+
+    # ESP32 availability → Telegram: offline alert (grace + escalation, handled
+    # inside AlertTracker) and a restored alert when it comes back. Coexists
+    # with SyncAgent's own online callback (both run on the transition).
+    mqtt.set_esp_offline_callback(alert_tracker.record_esp_offline)
+    mqtt.set_esp_online_callback(alert_tracker.record_esp_restored)
 
     # Enrolment relay (SSE enroll/enroll_cancel → ESP32 arm → Cloud capture)
     enroll_relay = EnrollRelay(cloud_client=cloud, mqtt_publisher=mqtt)
@@ -115,10 +146,13 @@ def main():
     #    so the screen and the door work immediately even when the Cloud is
     #    offline. The blocking Cloud calls below happen after the UI is up.
     print("\n[Init] Starting camera worker...")
+    if sync.policy().is_empty():
+        print("[Schedule] No bundle yet — door behaves as before (allow + log)")
     worker = CameraWorker(
         mqtt_publisher=mqtt,
         cloud_client=cloud,
-        alert_tracker=alert_tracker
+        alert_tracker=alert_tracker,
+        schedule_policy=sync.policy()
     )
     worker.start()
 
@@ -154,9 +188,21 @@ def main():
     # 7. Start background sync (SSE + consistency check)
     sync.start()
 
+    # ESP presence watchdog. ESP-offline alerts were purely transition-driven
+    # (online→offline on door/status / broker LWT), so an ESP that NEVER
+    # connects — or silently disappears without a retained message — never
+    # fired an alert and the Cloud thought the room was healthy. This loop
+    # periodically treats "not online" (None/False, incl. never-seen) as an
+    # offline trigger; AlertTracker's own grace→alert→escalation logic still
+    # applies and its pending-timer de-dupe stops spam.
+    _last_esp_probe = time.time()
     try:
         while True:
             time.sleep(1)
+            if time.time() - _last_esp_probe >= cfg.HEARTBEAT_INTERVAL:
+                _last_esp_probe = time.time()
+                if not mqtt.is_esp_online():
+                    alert_tracker.record_esp_offline()
     except KeyboardInterrupt:
         pass
     finally:

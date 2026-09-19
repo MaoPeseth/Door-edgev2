@@ -20,6 +20,7 @@ from collections import deque
 from typing import Optional
 
 import config as cfg
+from core.cloud_client import CloudPermanentError
 
 _BUFFERED_ENDPOINTS = ("/api/edge/events", "/api/edge/alert")
 
@@ -127,31 +128,40 @@ class OfflineEventQueue:
             batch = list(self._pending)
             self._pending.clear()
 
+        # Drop record is copied back to _pending below; at the end the whole
+        # still-failing tail is requeued behind the first failure — the OLD
+        # code `break`ed after the first failure, silently LOSING every entry
+        # that came after it in the batch.
         kept = []
-        sent_any = False
-        for entry in batch:
-            resp = self._cloud._request(
-                "POST", entry["endpoint"], entry["payload"], retries=[1, 2]
-            )
+        for i, entry in enumerate(batch):
+            try:
+                resp = self._cloud._request(
+                    "POST", entry["endpoint"], entry["payload"],
+                    retries=[1, 2], raise_on_4xx=True,
+                )
+            except CloudPermanentError as e:
+                # Server definitively rejected this entry (4xx) — drop it, it
+                # can never succeed. No head/tail ambiguity: 4xx is confirmed
+                # rejection, unlike a plain network None below.
+                print(f"[OfflineQueue] Dropping rejected {entry['endpoint']} "
+                      f"(server 4xx: {e})")
+                continue
             if resp is not None:
-                sent_any = True
                 print(f"[OfflineQueue] Delivered {entry['endpoint']} "
                       f"(kind={entry['kind']}, ts={entry['ts']})")
                 continue
 
+            # Retryable failure (network error / timeout / 5xx / 429 after
+            # [1,2] retries) — requeue this entry AND every following one so
+            # no queued event is lost mid-batch.
             entry["tries"] += 1
-            if sent_any:
-                # Cloud is up (earlier entries went through) but rejects this
-                # one — a permanent payload error; drop it, don't stall the queue.
-                print(f"[OfflineQueue] Dropping rejected {entry['endpoint']} "
-                      f"(server up, permanent error)")
-                continue
             if entry["tries"] >= cfg.QUEUE_MAX_TRIES:
                 print(f"[OfflineQueue] Dropping {entry['endpoint']} after "
                       f"{entry['tries']} failed cycles")
                 continue
             kept.append(entry)
-            break   # first failure in a dead-cloud cycle — stop here
+            kept.extend(batch[i + 1:])
+            break   # stop after the first failure — everything after is kept
 
         with self._lock:
             # Re-queue failures in front of anything newly enqueued (FIFO)

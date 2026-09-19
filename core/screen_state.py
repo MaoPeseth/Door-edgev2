@@ -28,6 +28,9 @@ class ScreenState:
         self.state = "idle"     # idle | confirming | unlocked
         self.confirm = 0
 
+        # Latest hand detections (updated whenever the hand model runs)
+        self.hand_dets = []
+
         # Access / event info
         self.last_access = None
         self.alert_active = False
@@ -38,6 +41,7 @@ class ScreenState:
         self.mqtt_connected = False
         self.cloud_connected = False
         self.enrolled = 0
+        self.ir_mode = False
 
     # ── Frame ────────────────────────────────────────────────────────────────
 
@@ -51,6 +55,13 @@ class ScreenState:
             frame = None if self.frame is None else self.frame.copy()
             return self.frame_seq, frame
 
+    def get_frame_ref(self):
+        """Read-only frame reference (NO copy) for consumers that only read
+        the frame and never mutate it — e.g. the display, which copies before
+        drawing. Saves one full-frame copy per consumer per tick."""
+        with self._lock:
+            return self.frame_seq, self.frame
+
     # ── Results ──────────────────────────────────────────────────────────────
 
     def set_results(self, draw_cmds, yolo_dets, state, confirm):
@@ -63,6 +74,16 @@ class ScreenState:
     def get_results(self):
         with self._lock:
             return list(self.draw_cmds), list(self.yolo_dets), self.state, self.confirm
+
+    # ── Hand detections ────────────────────────────────────────────────────────
+
+    def set_hand_dets(self, dets):
+        with self._lock:
+            self.hand_dets = dets
+
+    def get_hand_dets(self):
+        with self._lock:
+            return list(self.hand_dets)
 
     # ── Access / alerts / events ─────────────────────────────────────────────
 
@@ -99,6 +120,16 @@ class ScreenState:
     def get_status(self):
         with self._lock:
             return self.mqtt_connected, self.cloud_connected, self.enrolled
+
+    # ── IR Mode ────────────────────────────────────────────────────────────────
+
+    def set_ir_mode(self, ir: bool):
+        with self._lock:
+            self.ir_mode = ir
+
+    def get_ir_mode(self):
+        with self._lock:
+            return self.ir_mode
 
 
 state = ScreenState()

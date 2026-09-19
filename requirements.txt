@@ -7,3 +7,5 @@ paho-mqtt==1.6.1
 Pillow
 ultralytics>=8.3.0
 openvino
+PyQt6
+

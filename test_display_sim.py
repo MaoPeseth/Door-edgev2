@@ -79,8 +79,8 @@ def main():
     display = ScreenDisplay()   # no mqtt/sync needed for this test
     display.start()
     if not display.is_running():
-        print("\nDisplay failed to start — is python3-tk installed?")
-        print("  sudo apt install python3-tk")
+        print("\nDisplay failed to start — is PyQt6 installed?")
+        print("  ./venv/bin/pip install PyQt6")
         return 1
 
     try:
