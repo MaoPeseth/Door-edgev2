@@ -12,3 +12,4 @@ schedule_bundle.json
 .vscode/
 logs/
 *.jsonl
+edge.lock

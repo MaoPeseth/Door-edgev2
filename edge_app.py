@@ -24,6 +24,7 @@ except ImportError:
     print("[OpenVINO] Package not found — InsightFace will use CPU")
 # ─────────────────────────────────────────────────────────────────────────────
 
+import fcntl
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,31 @@ import config as cfg
 # ~30s × 3 retries); a capped pool keeps that bounded while still off the
 # MQTT loop thread.
 _EVENT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="CloudEvent")
+
+_LOCK_PATH = os.path.join(cfg.BASE_DIR, "edge.lock")
+
+
+def _acquire_single_instance_lock():
+    """Guard against a second edge_app.py instance.
+
+    Two instances fight over /dev/video0 (V4L2 = one opener) and over the
+    MQTT client id edge-door-01 (each reconnect kicks the other's session) —
+    the camera then appears dead and the broker churns. Holding an exclusive
+    flock on edge.lock makes a duplicate launch exit immediately instead.
+    The lock is released automatically when the process exits.
+    """
+    lock = open(_LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        pid = lock.read().strip()
+        print(f"[Edge] Another instance is already running (edge.lock"
+              f"{' pid=' + pid if pid else ''}). Exiting.")
+        lock.close()
+        return None
+    lock.write(str(os.getpid()))
+    lock.flush()
+    return lock
 
 
 def _cap_openvino_threads(n):
@@ -72,6 +98,13 @@ def main():
     print("=" * 52)
     print("  Door-Edge Face Recognition System")
     print("=" * 52)
+
+    # Single-instance guard — a second launch (e.g. `python edge_app.py` in a
+    # terminal while the systemd service is running) must exit immediately
+    # instead of fighting the running one for the camera and the MQTT session.
+    _lock_handle = _acquire_single_instance_lock()
+    if _lock_handle is None:
+        return
 
     # Cap inference threads before any model compiles (reduces CPU burn)
     _cap_openvino_threads(cfg.INFERENCE_THREADS)
