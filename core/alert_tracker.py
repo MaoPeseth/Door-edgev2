@@ -315,6 +315,7 @@ class AlertTracker:
             try:
                 self._cloud.report_suspicious_alert(method=method,
                                                     fail_count=fail_count)
+                print(f"[Cloud] {method} alert sent (count={fail_count})")
             except Exception as e:
                 print(f"[Cloud] {method} alert error: {e}")
 
