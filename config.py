@@ -80,13 +80,14 @@ MIN_HAND_BOX_SIZE = 40    # min hand box width (px) accepted
 # ── Redis (native systemd on this machine) ────────────────────────────────────
 REDIS_HOST       = "localhost"
 REDIS_PORT       = 6379
+REDIS_DB         = 0      # logical DB — 0 is production; QA tests sandbox on 15
 REDIS_INDEX_NAME = "door_face_index"
 VECTOR_DIM       = 512
 
 # ── Face Matching ─────────────────────────────────────────────────────────────
 SIMILARITY_THRESHOLD = 0.6  # RGB mode: strict matching (raised from 0.4)
 DENIED_COOLDOWN      = 15     # seconds between denied MQTT messages
-DENIED_CLOUD_COOLDOWN = 15    # seconds between denied cloud event POSTs (non-face reasons)
+DENIED_CLOUD_COOLDOWN = 10   # seconds between denied cloud event POSTs (non-face reasons)
 INFERENCE_FPS        = 15     # max inference frames/sec (throttles CPU burn)
 INFERENCE_THREADS    = 4      # cap OpenVINO/OpenMP CPU threads (don't span all cores)
 # INFERENCE_EVERY_N  = 3      # LEGACY/unused — throttling is now time-based (INFERENCE_FPS)
@@ -102,7 +103,7 @@ NO_FACE_RESET_FRAMES = 10     # frames with no face before resetting confirmatio
 # These relaxed thresholds prevent false denies and noisy alerts in IR mode.
 # Detection: mean HSV saturation < IR_SATURATION_THRESHOLD → IR mode.
 IR_MODE_ENABLED          = True
-IR_SATURATION_THRESHOLD  = 8     # mean HSV saturation below this = IR mode (RGB ~15-20, IR ~0-5)
+IR_SATURATION_THRESHOLD  = 15     # mean HSV saturation below this = IR mode (RGB ~15-20, IR ~0-5)
 IR_SIMILARITY_THRESHOLD  = 0.4     # face matching (RGB: 0.6) — ArcFace less discriminative in IR
 IR_LIVENESS_THRESHOLD    = 0.50    # liveness score (RGB: 0.90) — MiniFASNet untrained on IR
 IR_LIVENESS_FAKE_STREAK  = 40     # consecutive FAKE before alert (RGB: 30) — alert sooner, IR is noisier

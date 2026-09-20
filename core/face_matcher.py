@@ -36,6 +36,7 @@ class FaceMatcher:
             cls._r = redis_lib.Redis(
                 host=cfg.REDIS_HOST,
                 port=cfg.REDIS_PORT,
+                db=getattr(cfg, "REDIS_DB", 0),
                 decode_responses=False,
             )
             cls._ensure_index()

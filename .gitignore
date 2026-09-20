@@ -13,3 +13,10 @@ schedule_bundle.json
 logs/
 *.jsonl
 edge.lock
+.pytest_cache/
+.coverage
+htmlcov/
+Testing/data.json
+# runtime artifacts
+crash_log.txt
+claude-code-qa.SKILL.md
